@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f4e8c">
+<title>得意先検索</title>
+<style>
+:root{
+  --bg:#eef1f5;--surface:#fff;--ink:#1c2430;--sub:#5b6675;--line:#d5dbe3;
+  --accent:#1f4e8c;--tint:#fff4d6;--tint-line:#e0a800;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#12171e;--surface:#1b222c;--ink:#e7ebf0;--sub:#9aa6b4;--line:#2c3644;
+    --accent:#7fb0ee;--tint:#3a3217;--tint-line:#d9a520;color-scheme:dark;}
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:16px/1.5 "Hiragino Sans","Noto Sans JP","Yu Gothic UI",system-ui,sans-serif}
+main{max-width:640px;margin:0 auto;padding:12px 12px 48px}
+h1{font-size:18px;margin:4px 2px 10px}
+.search{position:sticky;top:env(safe-area-inset-top,0px);background:var(--bg);padding:4px 0 8px;z-index:2}
+input[type=search]{width:100%;font:inherit;font-size:18px;padding:12px 14px;border:2px solid var(--line);
+  border-radius:10px;background:var(--surface);color:var(--ink)}
+input[type=search]:focus{outline:none;border-color:var(--accent)}
+.count{font-size:14px;color:var(--sub);margin:2px 2px 8px;min-height:1.5em}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:10px;margin-bottom:12px;overflow:hidden}
+.row{display:grid;grid-template-columns:7.2em 1fr;gap:8px;padding:8px 12px;border-top:1px solid var(--line)}
+.row:first-child{border-top:0}
+.lab{font-size:13px;color:var(--sub);padding-top:2px}
+.val{white-space:pre-wrap;word-break:break-word}
+.val.empty{color:var(--sub)}
+.row.name .val{font-weight:700;font-size:17px}
+.row.warn.filled{background:var(--tint);border-left:4px solid var(--tint-line)}
+details{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:16px}
+summary{cursor:pointer;font-weight:600}
+details p,.msg{font-size:14px;color:var(--sub);margin:8px 0}
+textarea{width:100%;height:90px;font:inherit;font-size:14px;padding:8px;border:1px solid var(--line);
+  border-radius:8px;background:var(--bg);color:var(--ink)}
+button{font:inherit;padding:9px 14px;border-radius:8px;border:1px solid var(--accent);
+  background:var(--accent);color:#fff;margin:6px 8px 0 0}
+@media (prefers-color-scheme:dark){button{color:#0b1a2e}}
+button.ghost{background:transparent;color:var(--accent)}
+input[type=file]{display:block;margin:6px 0;max-width:100%}
+.status{font-size:14px;margin-top:8px}
+.err{color:#c0392b}
+</style>
+</head>
+<body>
+<main>
+  <h1>得意先検索</h1>
+  <div class="search">
+    <input id="q" type="search" placeholder="会社名・店名（またはコード）" autocomplete="off" enterkeyhint="search">
+  </div>
+  <div class="count" id="count"></div>
+  <div id="results"></div>
+
+  <details id="importBox">
+    <summary>データの取り込み・更新</summary>
+    <p>ExcelのシートをCSV（UTF-8でもShift_JISでも可）で保存して選ぶか、Excelの表をコピーして貼り付けます。1行目は見出し行にしてください。取り込んだデータはこの端末のブラウザ内だけに保存されます。</p>
+    <input id="file" type="file" accept=".csv,.tsv,.txt,text/csv">
+    <textarea id="paste" placeholder="ここにExcelの表を貼り付け（見出し行を含む）"></textarea>
+    <button id="btnImport">貼り付けを取り込む</button>
+    <button id="btnClear" class="ghost">保存データを消す</button>
+    <div class="status" id="status"></div>
+  </details>
+</main>
+
+<script>
+(function(){
+  var FIELDS=[
+    {label:'コード',names:['コード']},
+    {label:'名称',names:['名称'],cls:'name'},
+    {label:'摘要',names:['摘要']},
+    {label:'仕切',names:['金額','仕切']},
+    {label:'運送会社',names:['運送会社']},
+    {label:'番号',names:['番号']},
+    {label:'注意点',names:['注意点'],cls:'warn'},
+    {label:'仕入担当（客先）',names:['仕入担当']},
+    {label:'営業担当',names:['担当者','営業担当']},
+    {label:'締め',names:['締め','締']}
+  ];
+  var KEY='tokuisaki-data-v1';
+  var memory=null;
+  var data=[];
+  var $=function(id){return document.getElementById(id)};
+
+  function load(){
+    try{var s=localStorage.getItem(KEY);if(s)return JSON.parse(s);}catch(e){}
+    return memory;
+  }
+  function save(obj){
+    memory=obj;
+    try{localStorage.setItem(KEY,JSON.stringify(obj));return true;}catch(e){return false;}
+  }
+
+  function norm(s){
+    return s.normalize('NFKC').toLowerCase()
+      .replace(/[\u30a1-\u30f6]/g,function(c){return String.fromCharCode(c.charCodeAt(0)-0x60)});
+  }
+
+  function parseTable(text){
+    text=text.replace(/^\uFEFF/,'');
+    var firstLine=text.split(/\r?\n/,1)[0]||'';
+    var d=firstLine.indexOf('\t')>=0?'\t':',';
+    var rows=[],row=[],cur='',q=false;
+    for(var i=0;i<text.length;i++){
+      var c=text[i];
+      if(q){
+        if(c==='"'){ if(text[i+1]==='"'){cur+='"';i++;} else q=false; }
+        else cur+=c;
+      }else if(c==='"'){q=true;}
+      else if(c===d){row.push(cur);cur='';}
+      else if(c==='\n'||c==='\r'){
+        if(c==='\r'&&text[i+1]==='\n')i++;
+        row.push(cur);cur='';rows.push(row);row=[];
+      }else cur+=c;
+    }
+    if(cur!==''||row.length){row.push(cur);rows.push(row);}
+    return rows;
+  }
+
+  function build(rows){
+    if(!rows.length)throw new Error('データが空です。');
+    var head=rows[0].map(function(h){return h.trim()});
+    var idx=FIELDS.map(function(f){
+      for(var i=0;i<f.names.length;i++){var k=head.indexOf(f.names[i]);if(k>=0)return k;}
+      return -1;
+    });
+    if(idx[0]<0||idx[1]<0)throw new Error('1行目に「コード」「名称」の見出しが見つかりません。見出し行を含めて取り込んでください。');
+    var out=[];
+    for(var r=1;r<rows.length;r++){
+      var rec=idx.map(function(k){return k>=0?(rows[r][k]||'').trim():''});
+      if(!rec[0]&&!rec[1])continue;
+      out.push(rec);
+    }
+    var missing=FIELDS.filter(function(f,i){return idx[i]<0}).map(function(f){return f.label});
+    return {rows:out,missing:missing};
+  }
+
+  function status(msg,isErr){
+    var s=$('status');s.textContent=msg;s.className='status'+(isErr?' err':'');
+  }
+
+  function applyImport(text){
+    try{
+      var res=build(parseTable(text));
+      var obj={rows:res.rows,at:new Date().toLocaleString('ja-JP')};
+      var ok=save(obj);
+      setData(obj);
+      var m=res.rows.length+'件を取り込みました。';
+      if(res.missing.length)m+=' ※見出しが無い項目: '+res.missing.join('、');
+      if(!ok)m+=' ※この端末では保存できないため、ページを閉じると消えます。';
+      status(m,false);
+      render();
+    }catch(e){status(e.message,true);}
+  }
+
+  function setData(obj){
+    data=(obj&&obj.rows||[]).map(function(rec){
+      return {rec:rec,n:norm(rec[1]).replace(/\s+/g,''),c:norm(rec[0]).replace(/\s+/g,'')};
+    });
+    $('count').dataset.at=obj&&obj.at?obj.at:'';
+  }
+
+  function render(){
+    var q=$('q').value,box=$('results'),cnt=$('count');
+    box.textContent='';
+    if(!data.length){
+      cnt.textContent='データが未登録です。下の「データの取り込み・更新」から取り込んでください。';
+      $('importBox').open=true;return;
+    }
+    var tokens=norm(q).split(/\s+/).filter(Boolean);
+    if(!tokens.length){
+      cnt.textContent='登録 '+data.length+'件'+(cnt.dataset.at?'（取り込み: '+cnt.dataset.at+'）':'');
+      return;
+    }
+    var hits=data.filter(function(d){
+      return tokens.every(function(t){return d.n.indexOf(t)>=0||d.c.indexOf(t)>=0});
+    });
+    cnt.textContent=hits.length?hits.length+'件ヒット':'該当なし';
+    var frag=document.createDocumentFragment();
+    hits.forEach(function(d){
+      var card=document.createElement('div');card.className='card';
+      FIELDS.forEach(function(f,i){
+        var v=d.rec[i];
+        var row=document.createElement('div');
+        row.className='row'+(f.cls?' '+f.cls:'')+(v?' filled':'');
+        var lab=document.createElement('div');lab.className='lab';lab.textContent=f.label;
+        var val=document.createElement('div');val.className='val'+(v?'':' empty');
+        val.textContent=v||'―';
+        row.appendChild(lab);row.appendChild(val);card.appendChild(row);
+      });
+      frag.appendChild(card);
+    });
+    box.appendChild(frag);
+  }
+
+  function readFile(f){
+    return f.arrayBuffer().then(function(buf){
+      try{return new TextDecoder('utf-8',{fatal:true}).decode(buf);}
+      catch(e){return new TextDecoder('shift_jis').decode(buf);}
+    });
+  }
+
+  $('q').addEventListener('input',render);
+  $('file').addEventListener('change',function(e){
+    var f=e.target.files[0];if(!f)return;
+    readFile(f).then(applyImport).catch(function(){status('ファイルを読み込めませんでした。',true)});
+    e.target.value='';
+  });
+  $('btnImport').addEventListener('click',function(){
+    var t=$('paste').value;
+    if(!t.trim()){status('貼り付け欄が空です。',true);return;}
+    applyImport(t);$('paste').value='';
+  });
+  $('btnClear').addEventListener('click',function(){
+    if(!confirm('この端末に保存したデータを消します。よろしいですか？'))return;
+    memory=null;try{localStorage.removeItem(KEY);}catch(e){}
+    setData(null);status('保存データを消しました。',false);render();
+  });
+
+  setData(load());
+  render();
+})();
+</script>
+</body>
+</html>
