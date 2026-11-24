@@ -35,6 +35,7 @@ input[type=search]:focus{outline:none;border-color:var(--accent)}
 .val{white-space:pre-wrap;word-break:break-word}
 .val.empty{color:var(--sub)}
 .row.name .val{font-weight:700;font-size:17px}
+.row.park .val{font-weight:700}
 .row.warn.filled{background:var(--tint);border-left:4px solid var(--tint-line)}
 details{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:16px}
 summary{cursor:pointer;font-weight:600}
@@ -82,8 +83,16 @@ input[type=file]{display:block;margin:6px 0;max-width:100%}
     {label:'注意点',names:['注意点'],cls:'warn'},
     {label:'仕入担当（客先）',names:['仕入担当']},
     {label:'営業担当',names:['担当者','営業担当']},
-    {label:'締め',names:['締め','締']}
+    {label:'締め',names:['締め','締']},
+    {label:'駐車券',names:['駐車券','駐車券サービス','駐車券の有無'],cls:'park'}
   ];
+  function parkLabel(v){
+    if(!v)return '';
+    var c=v.normalize('NFKC').trim();
+    if(/^[○◯〇oO]$/.test(c))return '○ 渡す';
+    if(/^[×✕✗xX]$/.test(c))return '× 渡さない';
+    return v;
+  }
   var KEY='tokuisaki-data-v1';
   var memory=null;
   var data=[];
@@ -192,7 +201,7 @@ input[type=file]{display:block;margin:6px 0;max-width:100%}
         row.className='row'+(f.cls?' '+f.cls:'')+(v?' filled':'');
         var lab=document.createElement('div');lab.className='lab';lab.textContent=f.label;
         var val=document.createElement('div');val.className='val'+(v?'':' empty');
-        val.textContent=v||'―';
+        val.textContent=(f.cls==='park'?parkLabel(v):v)||'―';
         row.appendChild(lab);row.appendChild(val);card.appendChild(row);
       });
       frag.appendChild(card);
